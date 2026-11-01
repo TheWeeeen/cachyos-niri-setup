@@ -118,8 +118,18 @@ pacman_install_retry() {
     elif pacman -Qq jack2 &>/dev/null; then
         conflict_fix+=(--assume-installed pipewire-jack=999)
     fi
-    need_sudo pacman "${conflict_fix[@]}" "$@" --noconfirm \
-        || die "Не удалось выполнить: pacman $* (лог: $LOG)
+    if need_sudo pacman "${conflict_fix[@]}" "$@" --noconfirm; then
+        return 0
+    fi
+    # Попытка 3: pipewire-jack объявлен конфликтующим с jack2, а ffmpeg/obs/audacity
+    # тянут именно jack2. Убираем pipewire-jack (звук через pipewire-pulse не страдает)
+    # и ставим пакеты заново.
+    if pacman -Qq pipewire-jack &>/dev/null; then
+        c_warn "конфликт pipewire-jack с jack2 — убираю pipewire-jack и повторяю"
+        need_sudo pacman -Rdd --noconfirm pipewire-jack || true
+        need_sudo pacman "$@" --noconfirm && return 0
+    fi
+    die "Не удалось выполнить: pacman $* (лог: $LOG)
 Если в логе 404 на файл пакета — устарел индекс. Помогает:
   sudo cachyos-rate-mirrors && sudo pacman -Syyu"
 }
