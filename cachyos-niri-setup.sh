@@ -121,7 +121,7 @@ safe_pacman_S() {
     local -a ok=() missing=()
     local p
     for p in "$@"; do
-        if [[ $DRY_RUN -eq 0 ]] && ! pacman -Ssq --freeze "$p" 2>/dev/null | grep -qx -- "$p"; then
+        if [[ $DRY_RUN -eq 0 ]] && ! pacman -Si "$p" &>/dev/null; then
             missing+=("$p")
         else
             ok+=("$p")
@@ -255,7 +255,7 @@ if [[ $DRY_RUN -eq 0 && $CONFIG_ONLY -eq 0 ]]; then
         c_warn "Индекс репозиториев может быть устаревшим — проверку наличия пакетов пропускаю"
     else
         for cp in "${CRITICAL_PKGS[@]}"; do
-            if ! pacman -Ssq --freeze "$cp" 2>/dev/null | grep -qx -- "$cp"; then
+            if ! pacman -Si "$cp" &>/dev/null; then
                 die "Пакет «$cp» не найден в подключённых репозиториях.
 Что делать:
   · проверь, что в /etc/pacman.conf есть строка [extra] и она не закомментирована
@@ -378,7 +378,7 @@ if [[ $HAS_NVIDIA -eq 1 && $CONFIG_ONLY -eq 0 ]]; then
     for f in /usr/lib/modules/*/pkgbase; do
         kb=$(cat "$f")
         cand="${kb}-headers"
-        if [[ $DRY_RUN -eq 1 ]] || pacman -Ssq --freeze "$cand" 2>/dev/null | grep -qx -- "$cand"; then
+        if [[ $DRY_RUN -eq 1 ]] || pacman -Si "$cand" &>/dev/null; then
             HDR_PKGS+=("$cand")
         else
             c_warn "Для ядра $kb нет пакета $cand — модуль dkms может не собраться"
