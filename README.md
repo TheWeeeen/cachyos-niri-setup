@@ -11,6 +11,7 @@
 | Файл | Что делает |
 |---|---|
 | `cachyos-niri-setup.sh` | ставит систему: niri, Noctalia, пакеты, темы, NVIDIA, конфиг |
+| `install-console.sh` | ставит саму систему с консоли, когда графический установщик не работает |
 | `cachyos-migrate.sh backup` | сохраняет ключи Secure Boot, список пакетов и данные на флешку |
 | `cachyos-migrate.sh restore` | возвращает ключи после переустановки и подписывает загрузчик |
 
@@ -45,6 +46,35 @@ chmod +x cachyos-niri-setup.sh
 
 Всё пишется в `~/niri-setup-<дата>.log`. Старый конфиг niri сохраняется рядом как
 `config.kdl.bak.<дата>`.
+
+## Установка системы с консоли (если Calamares зависает)
+
+Графический установщик CachyOS иногда висит на «Ожидание модуля» или падает на
+`chwd` / `fatlabel`. Тогда систему можно поставить без него, из той же live-сессии:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/TheWeeeen/cachyos-niri-setup/master/install-console.sh
+sudo bash install-console.sh
+```
+
+Скрипт спросит корневой раздел (например `/dev/sda5`) и раздел `/boot`
+(например `/dev/sda6`), покажет таблицу разделов, потребует ввести `FORMAT`
+и дальше сделает всё сам: btrfs + FAT32, `pacstrap`, `chroot`, локаль, время,
+пользователь, `systemd-boot` с записью в меню.
+
+Флаги:
+
+```
+--root /dev/sdX   корневой раздел
+--esp  /dev/sdX   раздел /boot
+--user имя        имя пользователя
+--hostname имя    имя машины
+--dry-run         только показать команды
+--yes             без подтверждения FORMAT (осторожно)
+```
+
+Разделы с NTFS скрипт форматировать откажется. После установки — `reboot`, в F11
+пункт «Linux Boot Manager», вход и уже потом `cachyos-niri-setup.sh`.
 
 ## Что ставится
 
