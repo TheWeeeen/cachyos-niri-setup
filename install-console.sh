@@ -93,6 +93,21 @@ done
 for m in $(findmnt -rn -S "$ESP_PART" -o TARGET 2>/dev/null || true); do
     run umount -R "$m" 2>/dev/null || true
 done
+# если что-то осталось висеть — снимаем принудительно и проверяем
+if [[ -n "$(findmnt -rn -S "$ROOT_PART" -o TARGET 2>/dev/null)" || -n "$(findmnt -rn -S "$ESP_PART" -o TARGET 2>/dev/null)" ]]; then
+    c_warn "разделы ещё смонтированы — снимаю принудительно"
+    run fuser -km "$MNT" 2>/dev/null || true
+    run umount -l -R "$MNT" 2>/dev/null || true
+    for p in "$ROOT_PART" "$ESP_PART"; do
+        for m in $(findmnt -rn -S "$p" -o TARGET 2>/dev/null || true); do
+            run umount -l -R "$m" 2>/dev/null || true
+        done
+    done
+fi
+if [[ $DRY -eq 0 ]]; then
+    left=$(findmnt -rn -S "$ROOT_PART" -o TARGET 2>/dev/null || true; findmnt -rn -S "$ESP_PART" -o TARGET 2>/dev/null || true)
+    [[ -z "$left" ]] || die "Не удалось размонтировать: $left — закрой программы, держащие раздел, и повтори"
+fi
 c_ok "Размонтировано"
 
 # ---------------------------------------------------------------- форматирование
