@@ -53,8 +53,10 @@ chmod +x cachyos-niri-setup.sh
 `sda3` не трогается). Ничего не спрашивает, всё зашито внутри:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TheWeeeen/cachyos-niri-setup/master/install-once.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/TheWeeeen/cachyos-niri-setup/8a6d6a8a88314a7d9346bd525bd3c1f73ffae963/install-once.sh | sudo bash
 ```
+
+Ссылка прибита к коммиту `8a6d6a8` — GitHub не отдаст закэшированную старую версию.
 
 Ставит базу, `systemd-boot`, локаль, пользователя и пароли:
 
