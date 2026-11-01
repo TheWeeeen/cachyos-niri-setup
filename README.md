@@ -53,8 +53,11 @@ chmod +x cachyos-niri-setup.sh
 `sda3` не трогается). Ничего не спрашивает, всё зашито внутри:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TheWeeeen/cachyos-niri-setup/8a6d6a8a88314a7d9346bd525bd3c1f73ffae963/install-once.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/TheWeeeen/cachyos-niri-setup/8a6d6a8a88314a7d9346bd525bd3c1f73ffae963/install-once.sh -o /tmp/i.sh && sudo bash /tmp/i.sh
 ```
+
+Качаем в файл и запускаем из файла — пайп `curl | bash` ломает выполнение,
+потому что внешние команды читают stdin самого скрипта.
 
 Ссылка прибита к коммиту `8a6d6a8` — GitHub не отдаст закэшированную старую версию.
 
