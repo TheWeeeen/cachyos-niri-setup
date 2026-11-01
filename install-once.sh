@@ -75,8 +75,8 @@ for p in "$ROOT_PART" "$ESP_PART"; do
     done
 done
 sleep 1
-left=$( { findmnt -rn -S "$ROOT_PART" -o TARGET 2>/dev/null
-          findmnt -rn -S "$ESP_PART"  -o TARGET 2>/dev/null; } | tr '\n' ' ' | sed 's/ *$//' )
+left=$( { findmnt -rn -S "$ROOT_PART" -o TARGET 2>/dev/null || true
+          findmnt -rn -S "$ESP_PART"  -o TARGET 2>/dev/null || true; } | tr '\n' ' ' | sed 's/ *$//' ) || true
 [[ -z "$left" ]] || die "Раздел занят: $left — перезагрузись и запусти снова"
 c_ok "Разделы свободны"
 
