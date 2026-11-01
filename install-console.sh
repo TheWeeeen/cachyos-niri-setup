@@ -113,7 +113,7 @@ run pacman -Sy --noconfirm --needed archlinux-keyring
 
 # ядро CachyOS, если доступно
 KERNEL=linux
-if pacman -Ssq --freeze linux-cachyos 2>/dev/null | grep -qx linux-cachyos; then
+if pacman -Ssq '^linux-cachyos$' 2>/dev/null | grep -qx linux-cachyos; then
     KERNEL=linux-cachyos
     c_info "Ядро: linux-cachyos"
 else
@@ -129,7 +129,7 @@ PKGS=(base base-devel "$KERNEL" "${KERNEL}-headers" linux-firmware btrfs-progs
       pipewire pipewire-pulse pipewire-audio wireplumber)
 [[ -n "$UCODE" ]] && PKGS+=("$UCODE")
 
-run pacstrap -K "$MNT" "${PKGS[@]}"
+run pacstrap "$MNT" "${PKGS[@]}"
 c_ok "Базовая система установлена"
 
 step "fstab"
