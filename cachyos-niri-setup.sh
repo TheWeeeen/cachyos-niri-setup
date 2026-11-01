@@ -96,11 +96,71 @@ refresh_mirrors() {
         || c_warn "cachyos-rate-mirrors не отработал — оставляю текущие зеркала"
 }
 
-# Установка с одной повторной попыткой после принудительного обновления индекса.
+# --------------------------------------------------------------------------
+# установка пакетов: один конфликтный пакет не валит весь прогон
+# --------------------------------------------------------------------------
+# Итоги установки — печатаются отчётом в конце.
+INSTALLED_PKGS=()   # что реально встало в этом прогоне
+FAILED_PKGS=()      # что не встало (ошибка транзакции, конфликт)
+SKIPPED_PKGS=()     # чего нет в подключённых репозиториях
+JACK_FIX_DONE=0     # pipewire-jack уже убирали — второй раз не трогаем
+
+# Медиа-пакеты зависят от виртуального «jack»; pacman выбирает провайдером
+# jack2, а jack2 конфликтует с pipewire-jack.
+JACK_PULLERS=(ffmpeg kdenlive obs-studio audacity mpv)
+
+pulls_jack2() {
+    local p q
+    for p in "$@"; do
+        [[ "$p" == "jack" || "$p" == "jack2" ]] && return 0
+        for q in "${JACK_PULLERS[@]}"; do
+            [[ "$p" == "$q" ]] && return 0
+        done
+    done
+    return 1
+}
+
+# Убирает pipewire-jack, если он мешает ставить пакеты, тянущие jack2.
+# Срабатывает не больше одного раза за прогон. 0 — убрал/убрал бы.
+drop_pipewire_jack() {
+    [[ $JACK_FIX_DONE -eq 1 ]] && return 1
+    pkg_installed pipewire-jack || return 1
+    pulls_jack2 "$@" || return 1
+    JACK_FIX_DONE=1
+    if [[ $DRY_RUN -eq 1 ]]; then
+        printf '  [dry-run] sudo pacman -Rdd --noconfirm pipewire-jack  # конфликт с jack2\n'
+        return 0
+    fi
+    c_warn "конфликт pipewire-jack ↔ jack2: убираю pipewire-jack один раз"
+    c_info "звук останется на pipewire-pulse, JACK-приложения пойдут через jack2"
+    if need_sudo pacman -Rdd --noconfirm pipewire-jack; then
+        c_ok "pipewire-jack удалён"
+        return 0
+    fi
+    c_warn "удалить pipewire-jack не удалось — пробую ставить как есть"
+    return 1
+}
+
+# Уникальные элементы списка (dedupe без внешних утилит).
+unique_list() {
+    local -A seen=()
+    local -a out=()
+    local x
+    for x in "$@"; do
+        [[ -n "${seen[$x]:-}" ]] && continue
+        seen[$x]=1
+        out+=("$x")
+    done
+    printf '%s' "${out[*]}"
+}
+
+# Установка с одной повторной попыткой после обнуления индекса.
 # Лечит классический 404: в базе старый файл, на зеркале уже новый.
+# НИКОГДА не вызывает die: вернул 1 — вызывающий сам решает, что делать
+# (для пакетов это поштучный фолбэк в safe_pacman_S).
 pacman_install_retry() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        printf '  [dry-run] sudo pacman %s\n' "$*"
+        printf '  [dry-run] sudo pacman --noconfirm %s\n' "$*"
         return 0
     fi
     if need_sudo pacman "$@" --noconfirm; then
@@ -109,33 +169,33 @@ pacman_install_retry() {
     c_warn "pacman вернул ошибку — обновляю зеркала и индекс, пробую ещё раз"
     refresh_mirrors || true
     need_sudo pacman -Syy --noconfirm >/dev/null 2>&1 || true
-    # Конфликт pipewire-jack <-> jack2: kdenlive/obs тянут jack2 по имени, а он
-    # конфликтует с pipewire-jack (оба предоставляют jack). Подсказываем pacman,
-    # что jack2 уже «есть», вместо удаления рабочего pipewire.
-    local -a conflict_fix=()
-    if pacman -Qq pipewire-jack &>/dev/null; then
-        conflict_fix+=(--assume-installed jack2=999)
-    elif pacman -Qq jack2 &>/dev/null; then
-        conflict_fix+=(--assume-installed pipewire-jack=999)
-    fi
-    if need_sudo pacman "${conflict_fix[@]}" "$@" --noconfirm; then
+    if need_sudo pacman "$@" --noconfirm; then
         return 0
     fi
-    # Попытка 3: pipewire-jack объявлен конфликтующим с jack2, а ffmpeg/obs/audacity
-    # тянут именно jack2. Убираем pipewire-jack (звук через pipewire-pulse не страдает)
-    # и ставим пакеты заново.
-    if pacman -Qq pipewire-jack &>/dev/null; then
-        c_warn "конфликт pipewire-jack с jack2 — убираю pipewire-jack и повторяю"
-        need_sudo pacman -Rdd --noconfirm pipewire-jack || true
-        need_sudo pacman "$@" --noconfirm && return 0
+    # Конфликт pipewire-jack <-> jack2: ffmpeg/obs/kdenlive тянут «jack», pacman
+    # берёт провайдером jack2, а тот конфликтует с pipewire-jack. Один раз
+    # убираем pipewire-jack и повторяем ту же команду.
+    if [[ $JACK_FIX_DONE -eq 0 ]] && drop_pipewire_jack "$@"; then
+        if need_sudo pacman "$@" --noconfirm; then
+            return 0
+        fi
     fi
-    die "Не удалось выполнить: pacman $* (лог: $LOG)
-Если в логе 404 на файл пакета — устарел индекс. Помогает:
-  sudo cachyos-rate-mirrors && sudo pacman -Syyu"
+    c_warn "pacman не смог выполнить: pacman $*"
+    return 1
 }
 
-# Ставит только те пакеты, которые реально есть в репозиториях:
-# если зеркала отстали, остальное всё равно поставится.
+_mark_installed() {
+    local p
+    for p in "$@"; do
+        if pkg_installed "$p"; then
+            INSTALLED_PKGS+=("$p")
+        fi
+    done
+}
+
+# Ставит пакеты группой, а если транзакция не прошла целиком — поштучно.
+# Никогда не валит установку: отсутствующие в репозиториях → SKIPPED_PKGS,
+# неудачные → FAILED_PKGS, остальные из группы всё равно ставятся.
 safe_pacman_S() {
     local -a ok=() missing=()
     local p
@@ -148,9 +208,41 @@ safe_pacman_S() {
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         c_warn "Нет в репозиториях, пропускаю: ${missing[*]}"
+        SKIPPED_PKGS+=("${missing[@]}")
     fi
-    if [[ ${#ok[@]} -gt 0 ]]; then
-        pacman_install_retry -S --needed "${ok[@]}"
+    [[ ${#ok[@]} -eq 0 ]] && return 0
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        drop_pipewire_jack "${ok[@]}" || true
+        printf '  [dry-run] sudo pacman -S --needed --noconfirm %s\n' "${ok[*]}"
+        return 0
+    fi
+
+    # до групповой установки: если в группе есть тянущие jack2 — освобождаем место
+    drop_pipewire_jack "${ok[@]}" || true
+
+    if pacman_install_retry -S --needed "${ok[@]}"; then
+        _mark_installed "${ok[@]}"
+        return 0
+    fi
+
+    # Группа не встала (обычно «X and Y are in conflict») — поштучно.
+    c_warn "групповая транзакция не прошла — ставлю поштучно (${#ok[@]} шт.)"
+    local -a failed=()
+    for p in "${ok[@]}"; do
+        if pkg_installed "$p"; then
+            continue
+        fi
+        if need_sudo pacman -S --needed --noconfirm "$p"; then
+            INSTALLED_PKGS+=("$p")
+        else
+            failed+=("$p")
+            FAILED_PKGS+=("$p")
+        fi
+    done
+    if [[ ${#failed[@]} -gt 0 ]]; then
+        c_err "из группы не встало: ${failed[*]}"
+        c_info "продолжаю: остальные пакеты уже поставлены, полный отчёт — в конце"
     fi
     return 0
 }
@@ -162,7 +254,13 @@ aur_install() {
         printf '  [dry-run] paru -S --needed --noconfirm %s\n' "$*"
         return 0
     fi
-    paru -S --needed --noconfirm "$@" || c_warn "AUR: не удалось поставить $*"
+    if paru -S --needed --noconfirm "$@"; then
+        _mark_installed "$@"
+    else
+        c_warn "AUR: не удалось поставить $*"
+        FAILED_PKGS+=("$@")
+    fi
+    return 0
 }
 
 niri_validate() {
@@ -309,6 +407,28 @@ if command -v lspci &>/dev/null && lspci 2>/dev/null | grep -iE 'vga|3d|display'
 fi
 [[ $NO_NVIDIA -eq 1 ]] && HAS_NVIDIA=0
 
+# Ветка NVIDIA. В Arch/CachyOS НЕТ пакета `nvidia-dkms` (проверено по API:
+# только nvidia-open-dkms, а он не поддерживает Pascal/GTX 10xx). Для Pascal
+# нужна ветка 580xx из репозитория cachyos.
+NV_DKMS=""; NV_UTILS=""; NV_SETTINGS=""; NV_LIB32=""
+if [[ $HAS_NVIDIA -eq 1 && $DRY_RUN -eq 0 ]]; then
+    if pacman -Si nvidia-580xx-dkms &>/dev/null; then
+        NV_DKMS=nvidia-580xx-dkms
+        NV_UTILS=nvidia-580xx-utils
+        NV_SETTINGS=nvidia-580xx-settings
+        NV_LIB32=lib32-nvidia-580xx-utils
+        c_info "NVIDIA: ветка 580xx (Pascal и старше)"
+    elif pacman -Si nvidia-open-dkms &>/dev/null; then
+        NV_DKMS=nvidia-open-dkms
+        NV_UTILS=nvidia-utils
+        NV_SETTINGS=nvidia-settings
+        NV_LIB32=lib32-nvidia-utils
+        c_info "NVIDIA: ветка nvidia-open (Turing и новее)"
+    else
+        c_warn "В репозиториях нет ни nvidia-580xx-dkms, ни nvidia-open-dkms"
+    fi
+fi
+
 # --------------------------------------------------------------------------
 # 1. пакеты
 # --------------------------------------------------------------------------
@@ -324,8 +444,9 @@ if [[ $CONFIG_ONLY -eq 0 ]]; then
     fi
 
     step "Обновление системы"
-    pacman_install_retry -Syu
-    pacman_install_retry -S --needed base-devel git pciutils
+    pacman_install_retry -Syu || c_warn "обновление системы не прошло — ставлю пакеты как есть"
+    pacman_install_retry -S --needed base-devel git pciutils \
+        || c_warn "base-devel/git/pciutils не встали целиком — продолжаю"
 
     step "Композитор и оболочка"
     CORE_PKGS=(
@@ -360,25 +481,38 @@ if [[ $CONFIG_ONLY -eq 0 ]]; then
 
     step "Работа и медиа"
     WORK_PKGS=(
-        ffmpeg kdenlive obs-studio gimp audacity mpv
-        pipewire-jack
         neovim opencode
         firefox chromium telegram-desktop
         fuzzel
     )
     safe_pacman_S "${WORK_PKGS[@]}"
 
+    # ffmpeg/kdenlive/obs-studio/audacity/mpv зависят от виртуального «jack»,
+    # и pacman тянет провайдером jack2 — он конфликтует с pipewire-jack.
+    # pipewire-jack в список НЕ входит: JACK отдаём jack2, звук идёт через
+    # pipewire-pulse. Если pipewire-jack уже стоит, drop_pipewire_jack уберёт
+    # его один раз (для этого safe_pacman_S тоже вызывает проверку).
+    MEDIA_PKGS=(ffmpeg kdenlive obs-studio gimp audacity mpv)
+    safe_pacman_S "${MEDIA_PKGS[@]}"
+
     if [[ $HAS_NVIDIA -eq 1 ]]; then
         c_info "NVIDIA-пакеты"
-        safe_pacman_S egl-wayland libva-nvidia-driver nvidia-utils nvidia-settings
+        safe_pacman_S egl-wayland libva-nvidia-driver ${NV_UTILS:-nvidia-utils} ${NV_SETTINGS:-nvidia-settings}
         if [[ -r /etc/pacman.conf ]] && grep -q '^\[multilib\]' /etc/pacman.conf; then
-            safe_pacman_S lib32-nvidia-utils
+            safe_pacman_S ${NV_LIB32:-lib32-nvidia-utils}
         fi
     fi
 
     # без композитора дальше идти незачем
     if [[ $DRY_RUN -eq 0 ]] && ! command -v niri &>/dev/null; then
-        die "niri не установился — прерываю, конфиг не трогаю"
+        die "niri не установился — прерываю, конфиг не трогаю.
+Что делать: посмотри FAILED-пакеты в логе, поставь niri вручную
+  sudo pacman -S --needed niri
+и запусти скрипт снова (он идемпотентный)."
+    fi
+    if [[ $DRY_RUN -eq 0 ]] && ! pkg_installed noctalia; then
+        c_warn "noctalia не установилась — конфиг запишу, но сессия будет без панели"
+        c_warn "доставь позже: sudo pacman -S --needed noctalia"
     fi
     c_ok "Основные пакеты установлены"
 
@@ -408,7 +542,11 @@ if [[ $HAS_NVIDIA -eq 1 && $CONFIG_ONLY -eq 0 ]]; then
         HDR_PKGS=(linux-headers)
     fi
     c_info "Заголовки ядер: ${HDR_PKGS[*]}"
-    safe_pacman_S nvidia-dkms mokutil "${HDR_PKGS[@]}"
+    if [[ -n "$NV_DKMS" || $DRY_RUN -eq 1 ]]; then
+        safe_pacman_S ${NV_DKMS:-nvidia-580xx-dkms} mokutil "${HDR_PKGS[@]}"
+    else
+        c_warn "NVIDIA: пакет драйвера не найден в репозиториях — модуль не поставится"
+    fi
 
     # Secure Boot: DKMS подписывает модули ключом MOK, но прошивка должна ему доверять
     if command -v mokutil &>/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
@@ -1021,7 +1159,7 @@ check_pkg() {
 for p in "${CRITICAL_PKGS[@]}"; do check_pkg "$p" critical; done
 for p in dolphin ark unrar zathura obsidian gnome-keyring firefox chromium zen-browser-bin \
          kitty opencode ffmpeg mpv kdenlive obs-studio gimp audacity 7zip \
-         noctalia xwayland-satellite pipewire wireplumber NetworkManager \
+         noctalia xwayland-satellite pipewire wireplumber networkmanager \
          noto-fonts ttf-jetbrains-mono-nerd qt6ct; do
     check_pkg "$p" optional
 done
@@ -1063,23 +1201,66 @@ fi
 
 # итог
 step "Итог"
-if [[ ${#MISSING_OPTIONAL[@]} -gt 0 ]]; then
-    c_warn "Пропущено (не критично): ${MISSING_OPTIONAL[*]}"
-    c_info "Доставишь позже: sudo pacman -S ${MISSING_OPTIONAL[*]}"
+
+# установлено / пропущено / ошибки
+if [[ ${#INSTALLED_PKGS[@]} -gt 0 ]]; then
+    uniq_inst=$(unique_list "${INSTALLED_PKGS[@]}")
+    c_ok "Установлено/на месте (${#INSTALLED_PKGS[@]}): $uniq_inst"
 else
-    c_ok "Все опциональные пакеты на месте"
+    c_info "Новых пакетов не было — всё уже стояло"
 fi
 
-EXIT_CODE=0
-if [[ ${#MISSING_CRITICAL[@]} -gt 0 ]]; then
-    c_err "Отсутствуют критичные пакеты: ${MISSING_CRITICAL[*]}"
-    c_err "Сессия niri не запустится. Проверь репозитории и повтори скрипт."
-    EXIT_CODE=1
-elif [[ $CFG_OK -eq 0 ]]; then
-    c_err "Конфиг niri невалиден — сессия не запустится."
-    EXIT_CODE=1
+if [[ ${#SKIPPED_PKGS[@]} -gt 0 ]]; then
+    c_warn "Пропущено, нет в репозиториях: $(unique_list "${SKIPPED_PKGS[@]}")"
 else
-    c_ok "Критичное на месте"
+    c_ok "Пропусков по отсутствию в репозиториях нет"
+fi
+
+if [[ ${#FAILED_PKGS[@]} -gt 0 ]]; then
+    failed_uniq=$(unique_list "${FAILED_PKGS[@]}")
+    c_err "ОШИБКИ установки: $failed_uniq"
+    c_info "Остальное поставлено, установка не прервана. Доставить вручную:"
+    c_info "  sudo pacman -S --needed $failed_uniq"
+    c_info "Если в выводе «are in conflict» про pipewire-jack/jack2 — оставь один из пакетов."
+else
+    c_ok "Ошибок установки нет"
+fi
+
+if [[ ${#MISSING_OPTIONAL[@]} -gt 0 ]]; then
+    c_warn "Необязательные не на месте: $(unique_list "${MISSING_OPTIONAL[@]}")"
+    c_info "Доставишь позже: sudo pacman -S $(unique_list "${MISSING_OPTIONAL[@]}")"
+fi
+
+if [[ ${#MISSING_CRITICAL[@]} -gt 0 ]]; then
+    c_warn "Не на месте из критичного набора: $(unique_list "${MISSING_CRITICAL[@]}")"
+fi
+
+# Код возврата: 0 — niri и noctalia на месте; 1 — иначе (в т.ч. битый конфиг).
+EXIT_CODE=0
+for p in niri noctalia; do
+    if pkg_installed "$p"; then
+        c_ok "сессия: $p на месте"
+    else
+        c_err "сессия: НЕТ пакета $p — niri-сессия не поднимется"
+        EXIT_CODE=1
+    fi
+done
+
+if [[ $CFG_OK -eq 0 ]]; then
+    c_err "Конфиг niri отсутствует или невалиден — сессия не запустится."
+    EXIT_CODE=1
+fi
+
+# остальные «критичные» (kitty) — предупреждение, не повод для кода 1
+for p in "${CRITICAL_PKGS[@]}"; do
+    [[ "$p" == "niri" || "$p" == "noctalia" ]] && continue
+    pkg_installed "$p" || c_warn "нет $p — поставь вручную: sudo pacman -S --needed $p"
+done
+
+# --dry-run ничего не ставил — «нет пакета» здесь не ошибка
+if [[ $DRY_RUN -eq 1 ]]; then
+    EXIT_CODE=0
+    c_info "Это был --dry-run: ничего не изменено"
 fi
 
 step "Что сделать руками"
