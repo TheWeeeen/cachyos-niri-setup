@@ -68,7 +68,13 @@ fi
 
 step "Размонтирование"
 umount -R "$MNT" 2>/dev/null || true
-fuser -km "$MNT" 2>/dev/null || true
+# ВАЖНО: fuser -m по обычному каталогу резолвится в ФС, где он лежит,
+# то есть в корень live-системы -> SIGKILL всем процессам сессии.
+# Поэтому только если /mnt реально точка монтирования, и с флагом -M (seat belt).
+if findmnt -rn "$MNT" >/dev/null 2>&1; then
+    fuser -kmM "$MNT" 2>/dev/null || true
+    umount -l -R "$MNT" 2>/dev/null || true
+fi
 for p in "$ROOT_PART" "$ESP_PART"; do
     for m in $(findmnt -rn -S "$p" -o TARGET 2>/dev/null || true); do
         umount -l -R "$m" 2>/dev/null || true

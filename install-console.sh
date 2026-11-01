@@ -96,7 +96,9 @@ done
 # если что-то осталось висеть — снимаем принудительно и проверяем
 if [[ -n "$(findmnt -rn -S "$ROOT_PART" -o TARGET 2>/dev/null)" || -n "$(findmnt -rn -S "$ESP_PART" -o TARGET 2>/dev/null)" ]]; then
     c_warn "разделы ещё смонтированы — снимаю принудительно"
-    run fuser -km "$MNT" 2>/dev/null || true
+    if findmnt -rn "$MNT" >/dev/null 2>&1; then
+        run fuser -kmM "$MNT" 2>/dev/null || true
+    fi
     run umount -l -R "$MNT" 2>/dev/null || true
     for p in "$ROOT_PART" "$ESP_PART"; do
         for m in $(findmnt -rn -S "$p" -o TARGET 2>/dev/null || true); do
