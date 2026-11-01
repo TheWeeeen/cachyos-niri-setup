@@ -109,7 +109,16 @@ pacman_install_retry() {
     c_warn "pacman вернул ошибку — обновляю зеркала и индекс, пробую ещё раз"
     refresh_mirrors || true
     need_sudo pacman -Syy --noconfirm >/dev/null 2>&1 || true
-    need_sudo pacman "$@" --noconfirm \
+    # Конфликт pipewire-jack <-> jack2: kdenlive/obs тянут jack2 по имени, а он
+    # конфликтует с pipewire-jack (оба предоставляют jack). Подсказываем pacman,
+    # что jack2 уже «есть», вместо удаления рабочего pipewire.
+    local -a conflict_fix=()
+    if pacman -Qq pipewire-jack &>/dev/null; then
+        conflict_fix+=(--assume-installed jack2=999)
+    elif pacman -Qq jack2 &>/dev/null; then
+        conflict_fix+=(--assume-installed pipewire-jack=999)
+    fi
+    need_sudo pacman "${conflict_fix[@]}" "$@" --noconfirm \
         || die "Не удалось выполнить: pacman $* (лог: $LOG)
 Если в логе 404 на файл пакета — устарел индекс. Помогает:
   sudo cachyos-rate-mirrors && sudo pacman -Syyu"
