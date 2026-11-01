@@ -25,26 +25,53 @@ upload() {
 [[ $EUID -eq 0 ]] || exec sudo -E bash "$0" "$@"
 REBOOT=1; [[ "${1:-}" == "--no-reboot" ]] && REBOOT=0
 
-say "1/6 репозитории"
+say "1/6 зеркала cachyos"
 cp -a /etc/pacman.conf "/etc/pacman.conf.bak.$(date +%Y%m%d-%H%M%S)"
-if grep -q '^\[cachyos\]' /etc/pacman.conf; then
-    ok "cachyos уже подключён"
-else
-    # shellcheck disable=SC2016  # $arch/$repo подставляет pacman
-    printf '\n[cachyos]\nServer = https://mirror.cachyos.org/repo/$arch/$repo\n' >> /etc/pacman.conf
-    ok "cachyos добавлен"
+
+# mirror.cachyos.org у части провайдеров отваливается по таймауту. Проверяем
+# кандидатов и оставляем в pacman.conf только те, что реально отвечают.
+# shellcheck disable=SC2206  # $arch/$repo — литералы для pacman
+# одинарные кавычки обязательны: $arch/$repo подставляет pacman, а не bash
+MIRRORS=(
+    'https://mirror.yandex.ru/cachyos/repo/$arch/$repo'
+    'https://cdn77.cachyos.org/repo/$arch/$repo'
+    'https://mirror.cachyos.org/repo/$arch/$repo'
+    'https://archlinux.gay/cachy/repo/$arch/$repo'
+)
+GOOD=()
+for m in "${MIRRORS[@]}"; do
+    probe=${m//\$arch\/$repo/x86_64/cachyos}
+    if curl -fsS -m 6 -o /dev/null "$probe/cachyos.db"; then
+        GOOD+=("$m"); ok "отвечает: $m"
+    else
+        warn "не отвечает: $m"
+    fi
+done
+if [[ ${#GOOD[@]} -eq 0 ]]; then
+    GOOD=("${MIRRORS[@]}")
+    warn "ни одно зеркало не ответило быстро — оставляю все подряд"
 fi
-if grep -q '^#\[multilib\]' /etc/pacman.conf; then
-    sed -i '/^#\[multilib\]/{s/^#//;n;s/^#//}' /etc/pacman.conf
-    ok "multilib включён"
-elif grep -q '^\[multilib\]' /etc/pacman.conf; then
-    ok "multilib уже включён"
-else
-    # multilib в Arch описан парой строк; добавляем с тем же mirrorlist
-    # shellcheck disable=SC2016
-    printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
-    ok "multilib добавлен"
-fi
+
+# переписываем секцию [cachyos] целиком
+awk '/^\[cachyos\]/{skip=1; next} skip && /^\[/{skip=0} !skip' /etc/pacman.conf > /etc/pacman.conf.new
+mv /etc/pacman.conf.new /etc/pacman.conf
+{
+    echo
+    echo "[cachyos]"
+    for m in "${GOOD[@]}"; do echo "Server = $m"; done
+} >> /etc/pacman.conf
+ok "в pacman.conf прописано зеркал: ${#GOOD[@]}"
+# multilib обязателен (lib32-* в зависимостях 580xx). В mirrorlist CachyOS он
+# обычно не прописан, поэтому задаём серверы явно, а старую секцию вырезаем.
+awk '/^\[multilib\]/{skip=1; next} skip && /^\[/{skip=0} !skip' /etc/pacman.conf > /etc/pacman.conf.new
+mv /etc/pacman.conf.new /etc/pacman.conf
+{
+    echo
+    echo "[multilib]"
+    echo 'Server = https://mirror.yandex.ru/archlinux/$repo/os/$arch'
+    echo 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch'
+} >> /etc/pacman.conf
+ok "multilib настроен на рабочие зеркала"
 pacman -Syy --noconfirm >/dev/null 2>&1 || warn "pacman -Syy вернул ошибку"
 
 say "2/6 проверка"
