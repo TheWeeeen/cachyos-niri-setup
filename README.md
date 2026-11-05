@@ -36,6 +36,7 @@ Windows на `sda3` не трогает — сверяет, что там NTFS.
 | `install-console.sh` | ставит саму систему с консоли, когда графический установщик не работает |
 | `cachyos-migrate.sh backup` | сохраняет ключи Secure Boot, список пакетов и данные на флешку |
 | `cachyos-migrate.sh restore` | возвращает ключи после переустановки и подписывает загрузчик |
+| `clean-before-hyprland.sh` | чистит систему перед сменой сборки: сироты, кэш, логи, конфиги старых панелей с бэкапом |
 
 ## Требования
 
@@ -162,6 +163,27 @@ USB_LABEL=Ventoy ./cachyos-migrate.sh backup
 
 `restore` возвращает ключи, подписывает загрузчик (`sbctl sign-all`) и распаковывает
 данные по выбору. Старые файлы не удаляются, а переименовываются в `.bak.<дата>`.
+
+## Очистка перед сменой сборки
+
+Если хочется перейти на другую сборку (HyDE, ML4W, свой рис) — сначала убрать
+хвосты от предыдущей, иначе конфликтуют конфиги и панели.
+
+```bash
+chmod +x clean-before-hyprland.sh
+./clean-before-hyprland.sh --dry-run   # показать, что будет удалено
+./clean-before-hyprland.sh             # спросит перед каждым шагом
+./clean-before-hyprland.sh --yes       # без вопросов (осторожно)
+```
+
+Что делает по шагам: осиротевшие пакеты (`pacman -Qdtq` → `-Rns`), кэш pacman
+(`paccache -r`, оставляет 3 версии), кэш yay/paru, логи systemd старше 4 недель,
+конфиги `hypr`, `waybar`, `wofi`, `swaync`, `mako`, `dunst`, `ags`, `quickshell`,
+`fuzzel`, `rofi` — с бэкапом в `~/hyprland-config-backup-<дата>`. Этот репозиторий
+раньше был отдельным `cachyos-cleaner`; скрипт лежал там в `README.md`, здесь он
+наконец исполняемый.
+
+Откат: `cp -r ~/hyprland-config-backup-<дата>/* ~/.config/`.
 
 ## Важно про Secure Boot
 
